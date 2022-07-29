@@ -1,0 +1,271 @@
+---
+title: 'HW #5 - Stacked Model'
+author: "Khalid Abdulshafi"
+date: "3/28/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, cache=TRUE}
+telco <- read.csv("TelcoChurn.csv", stringsAsFactors = TRUE)
+str(telco)
+summary(telco)
+```
+```{r, cache=TRUE}
+# Remove customerID
+telco$customerID <- NULL
+
+# Replace NA w/median
+telco$TotalCharges[is.na(telco$TotalCharges)] <- median(telco$TotalCharges, na.rm = T)
+
+# Randomize rows in data
+set.seed(414)
+telco_random <- telco[sample(nrow(telco)),]
+```
+
+
+```{r, cache=TRUE}
+# Build a model with y-intercept only
+# To be used in stepwise regression
+FitStart <- glm(Churn ~ 1, data = telco_random, family = "binomial")
+# Build a model with all variables
+FitAll <- glm(Churn ~ ., data = telco_random, family = "binomial")
+# Let's see if stepwise regression finds a better model
+step(FitStart, direction = "both", scope = formula(FitAll))
+```
+
+
+```{r}
+library(caret)
+glm_model <- glm(formula = as.factor(Churn) ~ Contract + InternetService + tenure + PaymentMethod +MultipleLines + PaperlessBilling + TotalCharges + OnlineSecurity + TechSupport + StreamingMovies + SeniorCitizen + OnlineBackup + StreamingTV + Dependents, family = "binomial", data = telco_random)
+
+glm_pred <- predict(glm_model, newdata = telco_random, type = "response")
+
+# Confusion Matrix
+glm_rounded_results <- sapply(glm_pred, round, digits = 0)
+glm_rounded_results_df <- data.frame(glm_rounded_results)
+levels(telco_random$Churn) <- c(0,1)
+confusionMatrix(as.factor(telco_random$Churn), as.factor(glm_rounded_results_df$glm_rounded_results))
+```
+
+
+```{r, cache=TRUE}
+# telco_random_mm <- as.data.frame(model.matrix(~. -1, telco_random))
+
+# Convert a factored, categorical variable to a numeric variable
+telco_random[sapply(telco_random, is.factor)] <- data.matrix(telco_random[sapply(telco_random, is.factor)])
+
+# Normalize data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+library(dplyr)
+telco_norm <- telco_random%>%mutate_if(is.numeric, normalize)
+```
+
+
+```{r, cache=TRUE}
+# Select all for test data
+test_set <- sample(1:nrow(telco_norm), 7043) 
+
+# Create train set & test set
+telco_train <- telco_norm[test_set,]
+telco_test <- telco_norm[test_set,]
+```
+
+
+```{r, cache=TRUE}
+library(neuralnet)
+nn <- neuralnet(Churn ~ ., data = telco_train, hidden = 1, linear.output = F)
+nn$result.matrix
+plot(nn)
+
+library(caret)
+# Test resulting output
+# Remove dependent variables
+temp_test <- subset(telco_test[-20])
+head(temp_test)
+nn_results <- neuralnet::compute(nn, temp_test)
+results <- data.frame(actual = telco_test$Churn, prediction = nn_results$net.result)
+head(results)
+
+# Confusion Matrix
+rounded_results <- sapply(results, round, digits = 0)
+rounded_results_df <- data.frame(rounded_results)
+attach(rounded_results_df)
+confusionMatrix(table(actual, prediction))
+```
+
+
+```{r, cache=TRUE}
+# Create separate data frame for 'y' feature, which is our target
+# telco_train_labels <- telco_norm[test_set, 20]
+# telco_test_labels <- telco_norm[test_set, 20]
+
+telco_knn_train <- telco_norm[test_set, -match("Churn", names(telco_norm))]
+telco_knn_test <- telco_norm[test_set, -match("Churn", names(telco_norm))]
+
+telco_knn_train_labels <- telco_norm[test_set, "Churn"]
+telco_knn_test_labels <- telco_norm[test_set, "Churn"]
+  
+library(class)
+library(gmodels)
+# Run kNN Algorithm
+kneighbors <- round(sqrt(nrow(telco_norm)))
+knn_pred <- knn(train = telco_knn_train, test = telco_knn_test, cl = telco_knn_train_labels, k = kneighbors)
+# Evaluate model performance
+CrossTable(x = telco_knn_test_labels, y = knn_pred, prop.chisq=FALSE)
+confusionMatrix(as.factor(telco_knn_test_labels), knn_pred)
+```
+
+
+```{r, cache=TRUE}
+# Train a model on the data
+# begin by training a simple linear SVM
+library(kernlab)
+# telco_classifier <- ksvm(as.factor(Churn) ~ ., data = telco_train, kernel = "vanilladot")
+
+# look at basic information about the model
+# telco_classifier
+
+# Evaluate model performance 
+# predictions on testing dataset
+# telco_predictions <- predict(telco_classifier, telco_test)
+
+# rounded_vanilla_results <- sapply(telco_predictions, round, digits = 0)
+# rounded_vanilla_results_df <- data.frame(rounded_vanilla_results)
+# head(rounded_vanilla_results_df)
+
+# table(telco_predictions, telco_test$Churn)
+
+# look only at agreement vs. non-agreement
+# construct a vector of TRUE/FALSE indicating correct/incorrect predictions
+# agreement <- telco_predictions == telco_test$Churn
+# table(agreement)
+# prop.table(table(agreement))
+
+# Improve model performance w/radial basis
+telco_classifier_rbf <- ksvm(as.factor(Churn) ~ ., data = telco_train, kernel = "rbfdot")
+telco_predictions_rbf <- predict(telco_classifier_rbf, telco_test)
+
+agreement_rbf <- telco_predictions_rbf == telco_test$Churn
+table(agreement_rbf)
+prop.table(table(agreement_rbf))
+
+# Improve model performance w/polynomial
+# telco_classifier_poly <- ksvm(as.factor(Churn) ~ ., data = telco_train, kernel = "polydot")
+# telco_predictions_poly <- predict(telco_classifier_poly, telco_test)
+# 
+# agreement_poly <- telco_predictions_poly == telco_test$Churn
+# table(agreement_poly)
+# prop.table(table(agreement_poly))
+
+# Improve model performance w/hyperbolic tangentsigmoid
+# telco_classifier_tanh <- ksvm(as.factor(Churn) ~ ., data = telco_train, kernel = "tanhdot")
+# telco_predictions_tanh <- predict(telco_classifier_tanh, telco_test)
+# 
+# agreement_tanh <- telco_predictions_tanh == telco_test$Churn
+# table(agreement_tanh)
+# prop.table(table(agreement_tanh))
+```
+
+
+```{r}
+# Decision Trees
+
+# Check the proportion of class variable
+prop.table(table(telco_train$Churn))
+
+# Train a model on the data
+
+# Build the simplest decision tree
+library(C50)
+telco_model <- C5.0(telco_train[-20], as.factor(telco_train$Churn))
+
+# Display simple facts about the tree
+telco_model
+
+# Display detailed information about the tree
+summary(telco_model)
+
+# Evaluate model performance
+
+# Create a factor vector of predictions on test data
+telco_pred <- predict(telco_model, telco_test)
+
+# cross tabulation of predicted versus actual classes
+library(gmodels)
+CrossTable(telco_test$Churn, telco_pred,
+           prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+           dnn = c('actual churn', 'predicted churn'))
+
+# Improve model performance
+
+# Boost the accuracy of decision trees
+# Boosted decision tree with 10 trials
+telco_boost10 <- C5.0(telco_train[-20], as.factor(telco_train$Churn),
+                       trials = 10)
+telco_boost10
+summary(telco_boost10)
+
+telco_boost_pred10 <- predict(telco_boost10, telco_test)
+CrossTable(telco_test$Churn, telco_boost_pred10,
+           prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+           dnn = c('actual churn', 'predicted churn'))
+
+# With telco_boost10, more false negatives are found, so consider using telco_model
+
+# Boosted decision tree with 100 trials
+telco_boost100 <- C5.0(telco_train[-20], as.factor(telco_train$Churn),
+                        trials = 100)
+telco_boost_pred100 <- predict(telco_boost100, telco_test)
+CrossTable(telco_test$Churn, telco_boost_pred100,
+           prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+           dnn = c('actual churn', 'predicted churn'))
+
+# With telco_boost100, I found the lowest amount of error.
+```
+
+
+```{r}
+df <- data.frame(glm_rounded_results, knn_pred, rounded_results, telco_predictions_rbf, telco_boost_pred100, telco_test$Churn)
+
+# Remove actual generated from kNN model prediction
+df$actual <- NULL
+
+# Partition 90% of the data into the training set and the remaining 10% in the testing set
+sample_size <- floor(0.90 * nrow(df))
+training_index <- sample(seq_len(nrow(df)), size = sample_size)
+
+# Create training and testing sets
+df_train <- df[training_index,]
+df_test <- df[-training_index,]
+
+# Create a cost matrix
+error_cost <- matrix(c(0, 1, 4, 0), nrow = 2)
+
+# Build the simplest decision tree
+decision_tree <- C5.0(df_train[-6], as.factor(df_train$telco_test.Churn))
+
+# Create a factor vector of predictions on test data
+decision_tree_pred <- predict(decision_tree, df_test)
+
+# Cross tabulation of predicted versus actual classes
+confusionMatrix(as.factor(df_test$telco_test.Churn), decision_tree_pred)
+
+# apply the cost matrix to the tree
+credit_cost <- C5.0(df_train[-6], as.factor(df_train$telco_test.Churn), costs = error_cost)
+
+# Create a factor vector of predictions on test data
+credit_cost_pred <- predict(credit_cost, df_test)
+
+# Cross tabulation of predicted versus actual classes
+confusionMatrix(as.factor(df_test$telco_test.Churn), credit_cost_pred)
+```
+
+
+> We managed to improve our models by building a two level model of models (aka Stacked Model) by decreasing the number of false negatives, which are 4x more costly than false positives. This trade resulting in a reduction of false negatives at the expense of increasing false positives is acceptable as long as our cost estimates are accurate. In addition, this trade resulting in a reduction of false negatives at the expense of decreasing accuracy is also acceptable because taking costs into account reduces uncertainty, clears up ambiguity and clarifies the financial consequences of different courses of action.
